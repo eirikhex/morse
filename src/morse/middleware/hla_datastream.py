@@ -1,46 +1,57 @@
 import logging; logger = logging.getLogger("morse." + __name__)
 import hla.rti as rti
+import sys
 
 from morse.core.datastream import DatastreamManager
 from morse.core import blenderapi
 
 class MorseBaseAmbassador(rti.FederateAmbassador):
-    def __init__(self, rtia, federation, time_sync):
+    def __init__(self, rtia, federation, time_sync, timestep):
         self._rtia = rtia
         self.federation = federation
         self._time_sync = time_sync
 
         self.synchronisation_points = {}
-        self.registred_objects = []
+        self.registred_objects = {} # name -> obj_handle
+        self.registred_class_ref = {} # obj_handle -> int
 
         self._object_handles = {} # string -> obj_handle
         self._attributes_handles = {} # (obj_handle, string) -> attr_handle
-        self._attributes_subscribed = {} # obj_handle -> [attr_handle]
+        self._objects_discovered = {} # obj_name -> obj
+        self._attributes_subscribed = {} # obj_name -> [attr_handle]
+        self._attributes_published = {} # obj_name -> [attr_handle]
         
-        self._attributes_values = {} # obj_handle -> { attr_handle -> value }
+        self._attributes_values = {} # obj_name -> { attr_handle -> value }
+
+        self.timestep = timestep
 
     def initialize_time_regulation(self):
         self.logical_time = self._rtia.queryFederateTime()
-        logger.debug("federation %s time %f" % (self.federation, self.logical_time))
+        logger.debug("federation %s time %f timestep %f" % 
+                (self.federation, self.logical_time, self.timestep))
 
         self.constraint_enabled = False
         self.regulator_enabled = False
         self.granted = False
-        self.lookahead = 1.0
+        self.lookahead = self.timestep
 
         self._rtia.enableTimeConstrained()
-        self._rtia.enableTimeRegulation(self.logical_time, self.lookahead)
+        self._rtia.enableTimeRegulation(self.logical_time, self.timestep)
         while not (self.constraint_enabled and self.regulator_enabled):
             self._rtia.tick(0, self.lookahead)
 
     def advance_time(self):
         if self._time_sync:
             self.granted = False
-            self._rtia.timeAdvanceRequest(self.logical_time + self.lookahead)
+            self._rtia.timeAdvanceRequest(self.logical_time + self.timestep)
             while not self.granted:
                 self._rtia.tick(0, self.lookahead)
         else:
             self._rtia.tick()
+
+    def register_sync_point(self, label):
+        self._rtia.registerFederationSynchronizationPoint(label,
+                "Waiting for other simulators")
 
     def wait_until_sync(self, label):
         # Make sure that we receive the announce sync point
@@ -52,14 +63,25 @@ class MorseBaseAmbassador(rti.FederateAmbassador):
             self._rtia.tick()
 
     def register_object(self, handle, name):
+        logger.debug("REGISTER object %s => %s" % (name, handle))
         obj = self._rtia.registerObjectInstance(handle, name)
-        self.registred_objects.append(obj)
+        self.registred_objects[name] = obj
         return obj
 
-    def terminate(self):
-        for obj in self.registred_objects:
-            self._rtia.deleteObjectInstance(obj,
-                self._rtia.getObjectInstanceName(obj))
+    def delete_object(self, name):
+        self._rtia.deleteObjectInstance(
+                self.registred_objects[name],
+                name)
+        del self.registred_objects[name]
+
+    def get_object(self, name):
+        if name in self.registred_objects:
+            return self.registred_objects[name]
+
+        if name in self._objects_discovered:
+            return self._objects_discovered[name]
+
+        return None
 
     def object_handle(self, name):
         handle = self._object_handles.get(name, None)
@@ -75,47 +97,84 @@ class MorseBaseAmbassador(rti.FederateAmbassador):
             self._attributes_handles[(obj_handle, name)] = handle
         return handle
 
-    def suscribe_attributes(self, obj_handle, attr_handles):
-        logger.debug("suscribe_attributes %s => %s" % (obj_handle, attr_handles))
-        curr_tracked_attr = set(self._attributes_subscribed.get(obj_handle, []))
+    def suscribe_attributes(self, name, obj_handle, attr_handles):
+        logger.debug("suscribe_attributes %s %s => %s" % (name, obj_handle, attr_handles))
+        curr_tracked_attr = set(self._attributes_subscribed.get(name, []))
         res = list(curr_tracked_attr.union(attr_handles))
-        self._attributes_subscribed[obj_handle] = res
+        self._attributes_subscribed[name] = res
 
         self._rtia.subscribeObjectClassAttributes(obj_handle, res)
+        ref_cnt = self.registred_class_ref.get(obj_handle, 0)
+        self.registred_class_ref[obj_handle] = ref_cnt + 1
+        logger.debug("registred_class_ref %s => %d" % (obj_handle, ref_cnt + 1))
+
+    def publish_attributes(self, name, obj_handle, attr_handles):
+        logger.debug("publish_attributes %s %s" % (name, attr_handles))
+        curr_tracked_attr = set(self._attributes_published.get(name, []))
+        res = list(curr_tracked_attr.union(attr_handles))
+        self._attributes_published[name] = res
+
+        self._rtia.publishObjectClass(obj_handle, attr_handles)
+
+    def unsuscribe_attributes(self, obj_handle):
+        logger.debug("unsuscribe_attributes %s" % (obj_handle))
+
+        if not obj_handle in self.registred_class_ref:
+            return
+
+        self.registred_class_ref[obj_handle] -= 1
+        logger.debug("registred_class_ref %s => %d" % (obj_handle,
+            self.registred_class_ref[obj_handle]))
+        if self.registred_class_ref[obj_handle] == 0:
+            self._rtia.unsubscribeObjectClass(obj_handle)
+            del self.registred_class_ref[obj_handle]
 
     def get_attributes(self, obj_name):
-        for key, attr in self._attributes_values.items():
-            if self._rtia.getObjectInstanceName(key) == obj_name:
-                return attr
-
-        return None
+        return self._attributes_values.get(obj_name, None)
 
     def update_attribute(self, obj_handle, value):
+        logger.debug("update_attributes %s for %s" % (value, obj_handle))
         if self._time_sync:
             self._rtia.updateAttributeValues(obj_handle, value, "morse_update",
-                                             self.logical_time + self.lookahead)
+                                             self.logical_time + self.timestep)
         else:
             self._rtia.updateAttributeValues(obj_handle, value, "morse_update")
 
     # Callbacks for FedereteAmbassadors 
     def discoverObjectInstance(self, obj, objectclass, name):
         logger.debug("DISCOVER %s %s %s" % (name, obj, objectclass))
-        subscribed_attributes = self._attributes_subscribed.get(objectclass, None)
+        self._objects_discovered[name] = obj
+
+        subscribed_attributes = self._attributes_subscribed.get(name, None)
         if subscribed_attributes:
             self._rtia.requestObjectAttributeValueUpdate(obj, subscribed_attributes)
             default_value = {}
             for attr in subscribed_attributes:
                 default_value[attr] =  None
-            self._attributes_values[obj] = default_value
+            self._attributes_values[name] = default_value
+
+        published_attributes = self._attributes_published.get(name, None)
+        if published_attributes:
+            logger.debug("attributeOwnershipAcquisition %s %s %s" % (name, obj, published_attributes))
+            self._rtia.attributeOwnershipAcquisition(obj, published_attributes, "morse_owner")
+
+    def attributeOwnershipAcquisitionNotification(self, obj, attr):
+        obj_name = self._rtia.getObjectInstanceName(obj)
+        logger.debug("attributeOwnershipAcquisitionNotification %s %s %s" % (obj, obj_name, attr))
 
     def reflectAttributeValues(self, obj, attributes, tag, order, transport, time=None, retraction=None):
-        logger.debug("reflectAttributeValues for %s %s" % (self._rtia.getObjectInstanceName(obj), attributes))
-        attr_entry = self._attributes_values.get(obj, None)
-        if not attr_entry:
-            return
-        for key in attr_entry.keys():
-            if key in attributes:
-                attr_entry[key] = attributes[key]
+        try:
+            obj_name = self._rtia.getObjectInstanceName(obj)
+            logger.debug("reflectAttributeValues for %s %s" % (obj_name, attributes))
+            attr_entry = self._attributes_values.get(obj_name, None)
+            if not attr_entry:
+                return
+            for key in attr_entry.keys():
+                if key in attributes:
+                    attr_entry[key] = attributes[key]
+        except rti.ObjectNotKnown:
+            logger.warning("Receive an RAV for object %s but it is not anymore "
+                           "in the simulation" % obj)
 
     def timeConstrainedEnabled(self, time):
         logger.debug("Constrained at time %f" % time)
@@ -140,12 +199,15 @@ class MorseBaseAmbassador(rti.FederateAmbassador):
 
 
 class HLABaseNode:
-    def __init__(self, klass, fom, node_name, federation, sync_point, time_sync):
+    def __init__(self, klass, fom, node_name, federation, sync_point, 
+                       sync_register, time_sync, timestep):
         """
         Initializes HLA (connection to RTIg, FOM file, publish robots...)
         """
 
         logger.info("Initializing HLA node.")
+
+        self._federation = federation
 
         try:
             logger.debug("Creating RTIA...")
@@ -166,7 +228,7 @@ class HLABaseNode:
                     "Please check the '.fed' file syntax.")
                 raise
             logger.debug("Creating MorseAmbassador...")
-            self.morse_ambassador = klass(self.rtia, federation, time_sync)
+            self.morse_ambassador = klass(self.rtia, federation, time_sync, timestep)
             try:
                 self.rtia.joinFederationExecution(node_name, 
                     federation, self.morse_ambassador)
@@ -190,13 +252,18 @@ class HLABaseNode:
                 "Please check your HLA network configuration.", error)
             raise
 
+
         if sync_point:
+            if sync_register:
+                self.morse_ambassador.register_sync_point(sync_point)
+                print("Press ENTER when all simulators are ready")
+                sys.stdin.read(1)
             self.morse_ambassador.wait_until_sync(sync_point)
 
         if time_sync:
             self.morse_ambassador.initialize_time_regulation()
             
-    def __del__(self):
+    def finalize(self):
         """
         Close all open HLA connections.
         """
@@ -205,6 +272,11 @@ class HLABaseNode:
             del self.morse_ambassador
         self.rtia.resignFederationExecution(
             rti.ResignAction.DeleteObjectsAndReleaseAttributes)
+        try:
+            self.rtia.destroyFederationExecution(self._federation)
+        except:
+            pass
+        del self.rtia
 
 class HLADatastreamManager(DatastreamManager):
     """ External communication using sockets. """
@@ -219,23 +291,32 @@ class HLADatastreamManager(DatastreamManager):
             node_name = kwargs["name"]
             federation = kwargs["federation"]
             sync_point = kwargs.get("sync_point", None)
+            sync_register = kwargs.get("sync_register", False)
             time_sync = kwargs.get("time_sync", False)
+            timestep = kwargs.get("timestep", 1.0 / blenderapi.getfrequency())
+            self.stop_time = kwargs.get("stop_time", float("inf"))
 
             self.node = HLABaseNode(MorseBaseAmbassador, fom, node_name,
-                                    federation, sync_point, time_sync)
+                                    federation, sync_point, sync_register, time_sync, timestep)
         except KeyError as error:
             logger.error("One of [fom, name, federation] attribute is not configured: "
                          "Cannot create HLADatastreamManager")
             raise
 
+    def finalize(self):
+        DatastreamManager.finalize(self)
+        self.node.finalize()
+
     def register_component(self, component_name, component_instance, mw_data):
         """ Open the port used to communicate by the specified component.
         """
 
-        mw_data[2]['__hla_node'] = self.node
+        mw_data[3]['__hla_node'] = self.node
 
         DatastreamManager.register_component(self, component_name,
                                                    component_instance, mw_data)
 
     def action(self):
         self.node.morse_ambassador.advance_time()
+        if self.stop_time < self.node.morse_ambassador.logical_time:
+            blenderapi.persistantstorage().serviceObjectDict["simulation"].quit()

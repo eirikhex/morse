@@ -11,8 +11,8 @@ class JointStatePublisher(ROSPublisher):
         js.header = self.get_ros_header()
 
         # collect name and positions of jointstates from sensor
-        js.name = self.data.keys()
-        js.position = self.data.values()
+        js.name = list(self.data.keys())[1:]
+        js.position = list(self.data.values())[1:]
         # for now leaving out velocity and effort
         #js.velocity = [1, 1, 1, 1, 1, 1, 1]
         #js.effort = [50, 50, 50, 50, 50, 50, 50]
@@ -29,6 +29,7 @@ class JointStatePR2Publisher(ROSPublisher):
         js.header = self.get_ros_header()
 
         joints =  fill_missing_pr2_joints(self.data)
+        del joints['timestamp']
         js.name = joints.keys()
         js.position = joints.values()
 

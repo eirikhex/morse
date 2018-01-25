@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 2.6)
 
 set(PACKAGE_NAME morse)
-set(PACKAGE_VERSION "1.2")
+set(PACKAGE_VERSION "1.3")
+
+project(${PACKAGE_NAME})
 
 # only available from cmake-2.8.4
 if(COMMAND cmake_policy)
@@ -11,29 +13,30 @@ if(COMMAND cmake_policy)
 endif()
 
 
-
 option(BUILD_CORE_SUPPORT "Build and install morse core" ON)
 option(BUILD_DOC_SUPPORT "Build and install morse documentation (Requiere Sphinx)" OFF)
-
-option(BUILD_POCOLIBS_SUPPORT "Build pocolibs framework support" OFF)
-option(BUILD_YARP2_SUPPORT "Build yarp framework support" OFF)
-option(BUILD_ROS_SUPPORT "Build ROS middleware support" OFF)
-option(BUILD_MOOS_SUPPORT "Build MOOS middleware support" OFF)
-option(BUILD_HLA_SUPPORT "Build HLA middleware support. Also used for distributed HLA simulation." OFF)
-
-option(PYMORSE_SUPPORT "Build and install the Python bindings for MORSE." OFF)
+option(BUILD_POCOLIBS_SUPPORT "Build pocolibs framework support" ON)
+option(BUILD_YARP_SUPPORT "Build yarp framework support" ON)
+option(BUILD_ROS_SUPPORT "Build ROS middleware support" ON)
+option(BUILD_MOOS_SUPPORT "Build MOOS middleware support" ON)
+option(BUILD_MAVLINK_SUPPORT "Build Mavlink middleware support" ON)
+option(BUILD_HLA_SUPPORT "Build HLA middleware support. Also used for distributed HLA simulation." ON)
+option(PYMORSE_SUPPORT "Build and install the Python bindings for MORSE." ON)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/config/)
 find_package(PkgConfig REQUIRED)
 
-set(PythonInterp_FIND_VERSION 3.2)
+set(PythonInterp_FIND_VERSION 3.3)
 find_package(PythonInterp REQUIRED)
 
 set(PythonLibs_FIND_VERSION "${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}")
 set(PythonLibs_FIND_VERSION_EXACT "${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}")
 find_package(PythonLibs REQUIRED)
 
-INCLUDE_DIRECTORIES(${PYTHON_INCLUDE_DIRS})
+set(ALL_C_PYTHON_MODULES "" CACHE STRING "" FORCE)
+
+# Add python include and library directories
+include_directories(${PYTHON_INCLUDE_DIRS})
 
 EXECUTE_PROCESS(COMMAND
 					${PYTHON_EXECUTABLE} -c "import distutils.sysconfig, sys; sys.stdout.write(distutils.sysconfig.get_python_lib(1,0,\"\"))"
@@ -58,39 +61,6 @@ ADD_CUSTOM_COMMAND(TARGET revisiontag COMMAND ${CMAKE_COMMAND}
 if (BUILD_CORE_SUPPORT)
 	INSTALL(FILES ${CMAKE_BINARY_DIR}/version.py DESTINATION ${PYTHON_INSTDIR}/morse/)
 endif(BUILD_CORE_SUPPORT)
-
-if (BUILD_YARP2_SUPPORT)
-	EXECUTE_PROCESS(COMMAND 
-					${PYTHON_EXECUTABLE} -c "import yarp;"
-					RESULT_VARIABLE YARP_PY_ERR
-				   )
-	if (YARP_PY_ERR)
-		MESSAGE(FATAL_ERROR "BUILD_YARP_SUPPORT is required, but '${PYTHON_EXECUTABLE}' can't find yarp python binding")
-	endif (YARP_PY_ERR)
-endif(BUILD_YARP2_SUPPORT)
-
-
-# check to make sure pymoos is installed
-if (BUILD_MOOS_SUPPORT)
-	EXECUTE_PROCESS(COMMAND 
-					${PYTHON_EXECUTABLE} -c "import pymoos.MOOSCommClient;"
-					RESULT_VARIABLE MOOS_PY_ERR
-				   )
-	if (MOOS_PY_ERR)
-		#message(${MOOS_PY_ERR})
-		#MESSAGE(FATAL_ERROR "BUILD_MOOS_SUPPORT is required, but '${PYTHON_EXECUTABLE}' can't find MOOS python binding")
-	endif (MOOS_PY_ERR)
-endif(BUILD_MOOS_SUPPORT)
-
-if (BUILD_HLA_SUPPORT)
-	EXECUTE_PROCESS(COMMAND 
-					${PYTHON_EXECUTABLE} -c "import hla;"
-					RESULT_VARIABLE HLA_PY_ERR
-				   )
-	if (HLA_PY_ERR)
-		MESSAGE(FATAL_ERROR "BUILD_HLA_SUPPORT is required, but '${PYTHON_EXECUTABLE}' can't find 'hla' python binding")
-	endif (HLA_PY_ERR)
-endif(BUILD_HLA_SUPPORT)
 
 ADD_SUBDIRECTORY(src)
 
@@ -164,7 +134,7 @@ ELSE()
 	SET (SPHINX_MAN_OUTPUT ${CMAKE_DOC_OUT}/man)
 	SET (SPHINX_FALSE_PYTHON_ENV ${CMAKE_CURRENT_BINARY_DIR}/fakeenv)
 
-	SET (PYTHON_DOC_ENV env PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}:${CMAKE_CURRENT_BINARY_DIR}/src:${SPHINX_FALSE_PYTHON_ENV}:${CMAKE_CURRENT_SOURCE_DIR}/src:${CMAKE_CURRENT_SOURCE_DIR}/testing:${CMAKE_CURRENT_SOURCE_DIR}/bindings/pymorse/src/:$$PYTHONPATH PYTHONDONTWRITEBYTECODE="morse" ${PYTHON_EXECUTABLE})
+ 	SET (PYTHON_DOC_ENV env PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}:${CMAKE_CURRENT_BINARY_DIR}/src:${SPHINX_FALSE_PYTHON_ENV}:${CMAKE_CURRENT_SOURCE_DIR}/src:${CMAKE_CURRENT_SOURCE_DIR}/testing:${CMAKE_CURRENT_SOURCE_DIR}/bindings/pymorse/src/:$$PYTHONPATH PYTHONDONTWRITEBYTECODE="morse" MORSESOURCE=${CMAKE_CURRENT_SOURCE_DIR} ${PYTHON_EXECUTABLE})
 	SET (SPHINX_BUILD_ENV ${PYTHON_DOC_ENV} ${SPHINX_BUILD})
 
 	# Copy the documentation in builddir, so we can include the generated part too
@@ -198,11 +168,15 @@ ELSE()
 		COMMAND ${CMAKE_COMMAND} -E touch ${SPHINX_FALSE_PYTHON_ENV}/pymoos/__init__.py
 		COMMAND ${CMAKE_COMMAND} -E touch ${SPHINX_FALSE_PYTHON_ENV}/pymoos/MOOSCommClient.py
 
-		COMMAND ${CMAKE_COMMAND} -E touch ${SPHINX_FALSE_PYTHON_ENV}/yarp.py
-	)
+		COMMAND ${CMAKE_COMMAND} -E make_directory ${SPHINX_FALSE_PYTHON_ENV}/pymavlink/dialects/v10/
+		COMMAND ${CMAKE_COMMAND} -E touch ${SPHINX_FALSE_PYTHON_ENV}/pymavlink/dialects/v10/__init__.py
+		COMMAND ${CMAKE_COMMAND} -E touch ${SPHINX_FALSE_PYTHON_ENV}/pymavlink/dialects/v10/common.py
+		COMMAND ${CMAKE_COMMAND} -E make_directory ${SPHINX_FALSE_PYTHON_ENV}/pymavlink/mavutil
+		COMMAND ${CMAKE_COMMAND} -E touch ${SPHINX_FALSE_PYTHON_ENV}/pymavlink/__init__.py
 
-	FILE(WRITE ${SPHINX_FALSE_PYTHON_ENV}/hla/omt.py "HLAfloat32LE=0\ndef HLAfixedArray(x,y,z):\n    pass")
-	FILE(WRITE ${SPHINX_FALSE_PYTHON_ENV}/hla/rti.py "class FederateAmbassador:\n    pass")
+		COMMAND ${CMAKE_COMMAND} -E touch ${SPHINX_FALSE_PYTHON_ENV}/yarp.py
+		COMMAND ${CMAKE_COMMAND} -DSPHINX_FALSE_PYTHON_ENV=${SPHINX_FALSE_PYTHON_ENV} -P ${CMAKE_CURRENT_SOURCE_DIR}/config/generate_false_env.cmake
+	)
 
 	# GeNoM fake stuff
 	FOREACH(lib genPos lwr niut pom platine spark stereopixel viam viman)
@@ -216,7 +190,7 @@ ELSE()
 	ENDFOREACH()
 
 
-	ADD_DEPENDENCIES(copy_doc revisiontag ${SPHINX_FALSE_PYTHON_ENV}/hla/omt.py)
+	ADD_DEPENDENCIES(copy_doc revisiontag)
 
 
 	FIND_PROGRAM(SPHINX_APIDOC NAMES sphinx-apidoc)

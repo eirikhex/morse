@@ -172,25 +172,13 @@ class Camera(morse.core.sensor.Sensor):
         known_ids = set()
         for obj in self._scene.objects:
             if obj.name != '__default__cam__' and id(obj) not in known_ids:
-                if blenderapi.version() < (2, 63, 0):
-                    members = None
-                elif blenderapi.version() < (2, 64, 0):
-                    members = obj.group
-                elif blenderapi.version() < (2, 65, 0):
-                    members = obj.group_parent
-                else:
-                    members = obj.groupMembers
+                members = obj.groupMembers
                 if not members:
                     self._scene_syncable_objects.append(
                             (obj, self._morse_scene.objects[obj.name]))
                     known_ids.add(id(obj))
                 else:
-                    if blenderapi.version() < (2, 64, 0):
-                        main_members = self._morse_scene.objects[obj.name].group
-                    elif blenderapi.version() < (2, 65, 0):
-                        main_members = self._morse_scene.objects[obj.name].group_parent
-                    else:
-                        main_members = self._morse_scene.objects[obj.name].groupMembers
+                    main_members = self._morse_scene.objects[obj.name].groupMembers
                     for i in range(0, len(main_members)):
                         self._scene_syncable_objects.append(
                                 (members[i], main_members[i]))
@@ -229,6 +217,9 @@ class Camera(morse.core.sensor.Sensor):
         vt_camera.source.capsize = [self.image_width, self.image_height]
         logger.info("Camera '%s': Exporting an image of capsize: %s pixels" %
                 (self.name(), vt_camera.source.capsize))
+
+        # Workaround capsize limit to window size
+        self.image_width, self.image_height = vt_camera.source.capsize
 
         # Reverse the image (boolean game-property)
         vt_camera.source.flip = self.vertical_flip

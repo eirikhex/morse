@@ -58,8 +58,17 @@ The following variables permit to configure HLA behaviour:
 - **sync_point**: Optional : the name of the initial synchronisation point
   used for the federation. If it is not present, Morse assumes there is no
   need to initial synchronisation
+- **sync_register**: Optional : if a **sync_point** is defined, and this
+  variable is true, then this instance of Morse will register the
+  **sync_point** to the RTIG, and the user should start the simulation by
+  pressing :kbd:`Enter`. The default is False.
 - **time_sync**: Optional : a boolean indicating if the simulation is in
   'Best-effort' mode or synchronised by HLA. The default value is False.
+- **timestep**: Optional : a float indicating how much logic time elapse each
+  game loop. **Do not set it if you use physics from Blender (or sensors
+  relying on Blender time !**.
+- **stop_time**: Optional : a float indicating when the simulation must stop.
+  If not configured, the simulation continues infinitely.
 
 
 You need to pass them to the ``configure_stream_manager`` method in the

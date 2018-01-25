@@ -328,24 +328,7 @@ def link_datastreams():
             # Skip the configuration of this component
             continue
 
-        # If the list contains only strings, insert the list inside another one.
-        # This is done for backwards compatibility with the previous
-        #  syntax that allowed only one middleware per component
-        if isinstance (datastream_list[0], str):
-            datastream_list = [datastream_list]
-
-        # What is the direction of our stream?
-        # -> for Sensors, they *publish*,
-        # -> for Actuator, they *read*
-        if isinstance(instance, Sensor):
-            direction = OUT
-        elif isinstance(instance, Actuator):
-            direction = IN
-        else:
-            assert False
-
-        persistantstorage.datastreams[component_name] = (direction,
-                                     [d[0] for d in datastream_list])
+        persistantstorage.datastreams[component_name] = datastream_list
 
         # Register all datastream's in the list
         for datastream_data in datastream_list:
@@ -487,11 +470,12 @@ def add_modifiers():
 
         for mod_data in mod_list:
             modifier_name = mod_data[0]
+            direction = mod_data[1]
             logger.info("Component: '%s' operated by '%s'" %
                         (component_name, modifier_name))
             # Make the modifier object take note of the component
             modifier_instance = register_modifier(modifier_name, instance,
-                                                  mod_data[1])
+                                                  direction, mod_data[2])
             if not modifier_instance:
                 return False
             persistantstorage.modifierDict[modifier_name] = modifier_instance
@@ -529,7 +513,8 @@ def init_multinode():
     except (NameError, AttributeError) as detail:
         logger.warning("No node name defined. Using host name.\n"
                         "\tException: ", detail)
-        node_name = os.uname()[1]
+        import socket
+        node_name = socket.gethostname()
 
     logger.info ("This is node '%s'" % node_name)
     # Create the instance of the node class
@@ -549,15 +534,13 @@ def init(contr):
     # Get the version of Python used
     # This is used to determine also the version of Blender
     persistantstorage.pythonVersion = sys.version_info
-    logger.info ("Python Version: %s.%s.%s" %
-                    persistantstorage.pythonVersion[:3])
-    logger.info ("Blender Version: %s.%s.%s" % morse.core.blenderapi.version())
-    logger.info  ("Python path: %s" % sys.path)
-    logger.info ("PID: %d" % os.getpid())
+    logger.info("Python Version: %s.%s.%s" % persistantstorage.pythonVersion[:3])
+    logger.info("Blender Version: %s.%s.%s" % morse.core.blenderapi.version())
+    logger.info("Python path: %s" % sys.path)
+    logger.info("PID: %d" % os.getpid())
 
     persistantstorage.morse_initialised = False
     persistantstorage.time = TimeStrategies.make(morse.core.blenderapi.getssr()['time_management'])
-    persistantstorage.current_time = persistantstorage.time.time
     # Variable to keep trac of the camera being used
     persistantstorage.current_camera_index = 0
 
@@ -566,7 +549,6 @@ def init(contr):
 
     logger.log(SECTION, 'SUPERVISION SERVICES INITIALIZATION')
     init_ok = init_ok and init_supervision_services()
-
 
     logger.log(SECTION, 'SCENE INITIALIZATION')
 
@@ -691,7 +673,6 @@ def simulation_main(contr):
     # Update the time variable
     try:
         persistantstorage.time.update()
-        persistantstorage.current_time = persistantstorage.time.time
     except AttributeError:
         # If the 'base_clock' variable is not defined, there probably was
         #  a problem while doing the init, so we'll abort the simulation.
@@ -759,13 +740,9 @@ def close_all(contr):
     logger.log(ENDSECTION, 'CLOSING DATASTREAMS...')
     # Force the deletion of the datastream objects
     if 'stream_managers' in persistantstorage:
-        for obj, datastream_instance in persistantstorage.stream_managers.items():
-            if datastream_instance:
-                import gc # Garbage Collector
-                logger.debug("At closing time, %s has %s references" %
-                        (datastream_instance,
-                         gc.get_referents(datastream_instance)))
-                del datastream_instance
+        for datastream_instance in persistantstorage.stream_managers.values():
+            datastream_instance.finalize()
+        del persistantstorage.stream_managers
 
     logger.log(ENDSECTION, 'CLOSING OVERLAYS...')
     del persistantstorage.overlayDict

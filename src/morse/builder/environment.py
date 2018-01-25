@@ -7,7 +7,7 @@ from morse.builder.data import MORSE_DATASTREAM_MODULE
 from morse.builder.abstractcomponent import Configuration
 from morse.core.morse_time import TimeStrategies
 
-class Environment(Component):
+class Environment(AbstractComponent):
     """ Class to configure the general environment of the simulation
 
     It handles the background environment in which your robots are simulated,
@@ -17,7 +17,7 @@ class Environment(Component):
     """
     multinode_distribution = dict()
 
-    def __init__(self, filename, fastmode = False, component_renaming = True):
+    def __init__(self, filename, main_scene = None, fastmode = False, component_renaming = True):
         """
         :param fastmode: (default: False) if True, disable most visual
                          effects (like lights...) to get the fastest
@@ -27,7 +27,19 @@ class Environment(Component):
                          no video camera)
 
         """
-        Component.__init__(self, 'environments', filename)
+        AbstractComponent.__init__(self, category = 'environments', filename = filename)
+        if main_scene:
+            base_scene = bpymorse.get_context_scene().name
+            self.append_scenes()
+            bpymorse.deselect_all()
+            scene = bpymorse.set_active_scene(main_scene)
+            for obj in scene.objects:
+                obj.select = True
+            bpymorse.make_links_scene(scene=base_scene)
+            bpymorse.del_scene()
+            bpymorse.set_active_scene(base_scene)
+        else:
+            self.append_meshes()
         AbstractComponent.components.remove(self) # remove myself from the list of components to ensure my destructor is called
 
         self._handle_default_interface()
@@ -117,8 +129,17 @@ class Environment(Component):
         If a name is already set (with 'obj.name=...'), it is used as it,
         and only the hierarchy is added to the name.
         """
+        import inspect
+        frame = inspect.currentframe()
+        frames = inspect.getouterframes(frame)
+        size_stack = len(frames)
+        for i in range(size_stack - 1, 0, -1):
+            if frames[i][3] == '__init__':
+                break
+        del frame
+        del frames
 
-        AbstractComponent.close_context(3)
+        AbstractComponent.close_context(i + 2)
 
         for component in AbstractComponent.components:
             if isinstance(component, Robot):
@@ -267,7 +288,8 @@ class Environment(Component):
             try:
                 self._node_name = os.environ["MORSE_NODE"]
             except KeyError:
-                self._node_name = os.uname()[1]
+                import socket
+                self._node_name = socket.gethostname()
         else:
             self._node_name = name
 
@@ -359,6 +381,16 @@ class Environment(Component):
         hud_text = bpymorse.get_object('Keys_text')
         hud_text.scale.y = 0.027 # to fit the HUD_plane
 
+        # Create a cube to compute the dt between two frames
+        _dt_name = '__morse_dt_analyser'
+        cube = Cube(_dt_name)
+        cube.scale = (0.01, 0.01, 0.01)
+        cube.location = [0.0, 0.0, -5000.0]
+        cube_obj = bpymorse.get_object(_dt_name)
+        cube_obj.game.physics_type = 'DYNAMIC'
+        cube_obj.hide_render = True
+        cube_obj.game.lock_location_z = True
+
         self._created = True
         # in case we are in edit mode, do not exit on error with CLI
         sys.excepthook = sys.__excepthook__ # Standard Python excepthook
@@ -375,35 +407,35 @@ class Environment(Component):
         """
         # Set the color at the horizon to dark azure
         bpymorse.get_context_scene().world.horizon_color = color
-            
+
     def enable_mist(self,value=True):
         """ Enables or disables mist
-        
+
         See `World/Mist on the Blender Manual
         <http://wiki.blender.org/index.php/Doc:2.6/Manual/World/Mist>`_
         for more information about this particular setting.
-        
+
         :param value: indicate whether to enable/disable mist
         """
         if isinstance(value, bool):
             bpymorse.get_context_scene().world.mist_settings.use_mist = value
-    
+
     def set_mist_settings(self, **settings):
         """ Sets the mist settings for the scene
-        
+
         See `World/Mist on the Blender Manual
         <http://wiki.blender.org/index.php/Doc:2.6/Manual/World/Mist>`_
         for more information about this particular setting.
-        
+
         Optional arguments need to be specified with identifyer:
         :param enable:     Enables or disables mist
         :param intensity:  Overall minimum intensity of the mist effect in [0,1]
         :param start:      Starting distance of the mist, measured from the camera
         :param depth:      Distance over which the mist effect fades in
         :param falloff:     Type of transition used to fade mist enum in ['QUADRATIC', 'LINEAR', 'INVERSE_QUADRATIC'], default 'QUADRATIC'
- 
+
         """
-        
+
         # set the values through bpymorse interface, erronous values are taken care of elsewhere
         if 'falloff' in settings:
             bpymorse.get_context_scene().world.mist_settings.falloff = settings['falloff']
@@ -415,8 +447,8 @@ class Environment(Component):
             bpymorse.get_context_scene().world.mist_settings.depth = settings['depth']
         if 'enable' in settings:
             self.enable_mist(settings['enable'])
-            
-  
+
+
 
     def show_debug_properties(self, value=True):
         """ Display the value of the game-properties marked as debug
@@ -667,6 +699,14 @@ class Environment(Component):
 
         my_logger = logging.getLogger('morse.' + component)
         my_logger.setLevel(level.upper())
+
+    def set_background_scene(self, scene):
+        """
+        Set the background scene used by main scene
+
+        :param scene: the name of the scene to use in background
+        """
+        bpymorse.get_context_scene().background_set = bpymorse.get_scene(scene)
 
     def __del__(self):
         """ Call the create method if the user has not explicitly called it """
